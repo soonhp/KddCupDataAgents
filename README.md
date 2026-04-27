@@ -60,3 +60,15 @@ python -m unittest discover -s tests -p 'test_*.py'
 
 - `tests/test_task_intelligence.py`: 라우팅/정규화/검증 회귀 테스트
 - `tests/test_failure_taxonomy.py`: 실패 taxonomy 분류 및 집계 회귀 테스트
+
+## PR 리뷰 승인 후 자동 머지
+
+저장소의 `main` 대상 PR에 대해, 아래 조건을 만족하면 GitHub Actions가 auto-merge(squash)를 활성화하도록 설정했습니다.
+
+- PR이 `draft`가 아닐 것
+- 최신 리뷰 상태 기준으로 `APPROVED`가 1개 이상일 것
+- 최신 리뷰 상태에 `CHANGES_REQUESTED`가 없을 것
+
+워크플로 파일: `.github/workflows/auto-merge-after-review.yml`
+
+> 참고: 워크플로는 auto-merge를 "활성화"합니다. 실제 머지는 브랜치 보호 규칙(필수 체크, 리뷰 수 등)을 모두 만족한 뒤 GitHub가 수행합니다.
