@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -106,6 +107,53 @@ class TaskIntelligenceTests(unittest.TestCase):
 
             route = decide_route(profile_task_context(task_dir))
             self.assertEqual(route.route, "hybrid_doc_table")
+
+    def test_schema_hints_capture_csv_columns_json_keys_and_doc_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_schema"
+            _write_task(task_dir, question="Calculate totals from context")
+            (task_dir / "context" / "csv").mkdir(parents=True)
+            (task_dir / "context" / "json").mkdir(parents=True)
+            (task_dir / "context" / "doc").mkdir(parents=True)
+            (task_dir / "context" / "csv" / "sales.csv").write_text("product,revenue\na,10\n", encoding="utf-8")
+            (task_dir / "context" / "json" / "meta.json").write_text(
+                json.dumps({"region": "APAC", "currency": "USD"}),
+                encoding="utf-8",
+            )
+            (task_dir / "context" / "doc" / "notes.md").write_text("# Notes\nUse net revenue.", encoding="utf-8")
+
+            schema_hints = profile_task_context(task_dir).schema_hints
+            self.assertIsNotNone(schema_hints)
+            assert schema_hints is not None
+            self.assertEqual(schema_hints["csv"][0]["columns"], ["product", "revenue"])
+            self.assertIn("region", schema_hints["json"][0]["top_level_keys"])
+            self.assertIn("net revenue", schema_hints["doc"][0]["preview"])
+
+    def test_schema_hints_capture_sqlite_tables_and_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_sqlite_schema"
+            _write_task(task_dir, question="Count orders by customer")
+            db_dir = task_dir / "context" / "db"
+            db_dir.mkdir(parents=True)
+            db_path = db_dir / "orders.sqlite"
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("CREATE TABLE orders (order_id INTEGER, customer TEXT, amount REAL)")
+                conn.commit()
+
+            schema_hints = profile_task_context(task_dir).schema_hints
+            self.assertIsNotNone(schema_hints)
+            assert schema_hints is not None
+            self.assertEqual(schema_hints["db"][0]["tables"][0]["name"], "orders")
+            column_names = [column["name"] for column in schema_hints["db"][0]["tables"][0]["columns"]]
+            self.assertEqual(column_names, ["order_id", "customer", "amount"])
+
+    def test_missing_context_sets_empty_schema_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_empty_schema"
+            _write_task(task_dir, question="")
+
+            profile = profile_task_context(task_dir)
+            self.assertEqual(profile.schema_hints, {"csv": [], "db": [], "json": [], "doc": []})
 
     def test_missing_context_sets_fallback_and_risk_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
