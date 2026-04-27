@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import signal
 import shutil
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -36,6 +37,37 @@ class TaskExecutionSummary:
     elapsed_seconds: float | None
     prediction_path: str
     trace_path: str
+
+
+def _write_run_summary(
+    *,
+    path: Path,
+    run_id: str | None,
+    input_dir: Path,
+    output_dir: Path,
+    logs_dir: Path,
+    summaries: list[TaskExecutionSummary],
+    failure_taxonomies: list,
+    interrupted: bool,
+) -> None:
+    failure_rollup = rollup_failure_taxonomy(failure_taxonomies)
+    summary_payload = {
+        "run_id": run_id,
+        "input_dir": str(input_dir),
+        "output_dir": str(output_dir),
+        "logs_dir": str(logs_dir),
+        "task_count": len(summaries),
+        "succeeded_task_count": sum(1 for item in summaries if item.succeeded),
+        "tasks": [asdict(item) for item in summaries],
+        "failure_taxonomy": [failure_taxonomy_to_dict(item) for item in failure_taxonomies],
+        "failure_rollup": failure_rollup_to_dict(failure_rollup),
+        "interrupted": interrupted,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    path.write_text(
+        json.dumps(summary_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _discover_task_ids(input_dir: Path) -> list[str]:
@@ -133,90 +165,116 @@ def run_evaluation(
     task_ids = _discover_task_ids(input_dir)
     summaries: list[TaskExecutionSummary] = []
     failure_taxonomies: list = []
+    run_summary_path = logs_dir / "run_summary.json"
+    stop_requested = False
 
-    for task_id in task_ids:
-        task_dir = input_dir / task_id
-        task_profile = profile_task_context(task_dir)
-        route_decision = decide_route(task_profile)
-
-        artifact = run_single_task(task_id=task_id, config=config, run_output_dir=run_output_dir)
-
-        task_output_dir = output_dir / task_id
-        task_output_dir.mkdir(parents=True, exist_ok=True)
-        prediction_path = task_output_dir / "prediction.csv"
-        if artifact.prediction_csv_path is not None and artifact.prediction_csv_path.exists():
-            shutil.copy2(artifact.prediction_csv_path, prediction_path)
-        else:
-            _write_fallback_prediction_csv(prediction_path)
-
-        normalize_prediction_csv(prediction_path)
-        verification_report = run_dual_verification(task_id, prediction_path)
-
-        task_logs_dir = logs_dir / task_id
-        task_logs_dir.mkdir(parents=True, exist_ok=True)
-
-        trace_target_path = task_logs_dir / "trace.json"
-        shutil.copy2(artifact.trace_path, trace_target_path)
-
-        schema_memory_path = task_logs_dir / "schema_memory.json"
-        schema_memory_path.write_text(
-            json.dumps(profile_to_dict(task_profile), ensure_ascii=False, indent=2) + "\n",
+    def _handle_stop_signal(signum: int, _frame: object) -> None:
+        nonlocal stop_requested
+        stop_requested = True
+        signal_name = signal.Signals(signum).name
+        (logs_dir / "runner.signal.log").write_text(
+            f"{datetime.now(timezone.utc).isoformat()} received {signal_name}; "
+            "runner will stop after current task.\n",
             encoding="utf-8",
         )
 
-        task_failure_taxonomy = classify_task_failure(
-            task_id=task_id,
-            succeeded=artifact.succeeded,
-            failure_reason=artifact.failure_reason,
-            verification_report=verification_report,
-        )
-        failure_taxonomies.append(task_failure_taxonomy)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGTERM, _handle_stop_signal)
+    signal.signal(signal.SIGINT, _handle_stop_signal)
 
-        task_log_payload = {
-            "task_id": task_id,
-            "succeeded": artifact.succeeded,
-            "failure_reason": artifact.failure_reason,
-            "prediction_csv": str(prediction_path),
-            "trace": str(trace_target_path),
-            "schema_memory": str(schema_memory_path),
-            "route_decision": route_to_dict(route_decision),
-            "verification": report_to_dict(verification_report),
-            "failure_taxonomy": failure_taxonomy_to_dict(task_failure_taxonomy),
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        }
-        (task_logs_dir / "task.log.json").write_text(
-            json.dumps(task_log_payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+    try:
+        for task_id in task_ids:
+            if stop_requested:
+                break
 
-        summaries.append(
-            TaskExecutionSummary(
+            task_dir = input_dir / task_id
+            task_profile = profile_task_context(task_dir)
+            route_decision = decide_route(task_profile)
+
+            artifact = run_single_task(task_id=task_id, config=config, run_output_dir=run_output_dir)
+
+            task_output_dir = output_dir / task_id
+            task_output_dir.mkdir(parents=True, exist_ok=True)
+            prediction_path = task_output_dir / "prediction.csv"
+            if artifact.prediction_csv_path is not None and artifact.prediction_csv_path.exists():
+                shutil.copy2(artifact.prediction_csv_path, prediction_path)
+            else:
+                _write_fallback_prediction_csv(prediction_path)
+
+            normalize_prediction_csv(prediction_path)
+            verification_report = run_dual_verification(task_id, prediction_path)
+
+            task_logs_dir = logs_dir / task_id
+            task_logs_dir.mkdir(parents=True, exist_ok=True)
+
+            trace_target_path = task_logs_dir / "trace.json"
+            shutil.copy2(artifact.trace_path, trace_target_path)
+
+            schema_memory_path = task_logs_dir / "schema_memory.json"
+            schema_memory_path.write_text(
+                json.dumps(profile_to_dict(task_profile), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            task_failure_taxonomy = classify_task_failure(
                 task_id=task_id,
                 succeeded=artifact.succeeded,
                 failure_reason=artifact.failure_reason,
-                elapsed_seconds=_load_elapsed_seconds(trace_target_path),
-                prediction_path=str(prediction_path),
-                trace_path=str(trace_target_path),
+                verification_report=verification_report,
             )
-        )
+            failure_taxonomies.append(task_failure_taxonomy)
 
-    failure_rollup = rollup_failure_taxonomy(failure_taxonomies)
+            task_log_payload = {
+                "task_id": task_id,
+                "succeeded": artifact.succeeded,
+                "failure_reason": artifact.failure_reason,
+                "prediction_csv": str(prediction_path),
+                "trace": str(trace_target_path),
+                "schema_memory": str(schema_memory_path),
+                "route_decision": route_to_dict(route_decision),
+                "verification": report_to_dict(verification_report),
+                "failure_taxonomy": failure_taxonomy_to_dict(task_failure_taxonomy),
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            (task_logs_dir / "task.log.json").write_text(
+                json.dumps(task_log_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
 
-    summary_payload = {
-        "run_id": run_id,
-        "input_dir": str(input_dir),
-        "output_dir": str(output_dir),
-        "logs_dir": str(logs_dir),
-        "task_count": len(summaries),
-        "succeeded_task_count": sum(1 for item in summaries if item.succeeded),
-        "tasks": [asdict(item) for item in summaries],
-        "failure_taxonomy": [failure_taxonomy_to_dict(item) for item in failure_taxonomies],
-        "failure_rollup": failure_rollup_to_dict(failure_rollup),
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-    }
-    (logs_dir / "run_summary.json").write_text(
-        json.dumps(summary_payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+            summaries.append(
+                TaskExecutionSummary(
+                    task_id=task_id,
+                    succeeded=artifact.succeeded,
+                    failure_reason=artifact.failure_reason,
+                    elapsed_seconds=_load_elapsed_seconds(trace_target_path),
+                    prediction_path=str(prediction_path),
+                    trace_path=str(trace_target_path),
+                )
+            )
+            _write_run_summary(
+                path=run_summary_path,
+                run_id=run_id,
+                input_dir=input_dir,
+                output_dir=output_dir,
+                logs_dir=logs_dir,
+                summaries=summaries,
+                failure_taxonomies=failure_taxonomies,
+                interrupted=stop_requested,
+            )
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        signal.signal(signal.SIGINT, previous_sigint)
+
+    _write_run_summary(
+        path=run_summary_path,
+        run_id=run_id,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        logs_dir=logs_dir,
+        summaries=summaries,
+        failure_taxonomies=failure_taxonomies,
+        interrupted=stop_requested,
     )
 
     return 0
