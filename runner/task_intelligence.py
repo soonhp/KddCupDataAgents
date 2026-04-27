@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,11 @@ DOCUMENT_SIGNALS = {
     "document",
     "based on the text",
 }
+MAX_SCHEMA_FILES_PER_TYPE = 20
+MAX_PREVIEW_CHARS = 500
+MAX_JSON_KEYS = 30
+MAX_SQLITE_TABLES = 30
+MAX_COLUMNS_PER_TABLE = 50
 
 
 @dataclass(slots=True)
@@ -85,6 +91,7 @@ class TaskContextProfile:
     estimated_context_size_bytes: int = 0
     file_counts: dict[str, int] | None = None
     question_signals: dict[str, list[str]] | None = None
+    schema_hints: dict[str, Any] | None = None
     risk_flags: list[str] | None = None
 
 
@@ -123,6 +130,13 @@ def _find_signals(question: str, signals: set[str]) -> list[str]:
         elif re.search(pattern, normalized):
             matched.append(signal)
     return matched
+
+
+def _safe_relative(path: Path, base: Path) -> str:
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return str(path)
 
 
 def infer_question_signals(question: str) -> QuestionSignals:
@@ -172,6 +186,114 @@ def load_task_metadata(task_dir: Path) -> TaskMetadata:
     )
 
 
+def _inspect_csv_file(path: Path, base: Path) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "path": _safe_relative(path, base),
+        "size_bytes": _safe_file_size(path),
+        "columns": [],
+        "sample_row_count": 0,
+        "error": None,
+    }
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, [])
+            info["columns"] = [str(column).strip() for column in header]
+            sample_rows = [row for _, row in zip(range(5), reader)]
+            info["sample_row_count"] = len(sample_rows)
+    except Exception as exc:  # pragma: no cover - defensive profiling path
+        info["error"] = f"{exc.__class__.__name__}: {exc}"
+    return info
+
+
+def _inspect_json_file(path: Path, base: Path) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "path": _safe_relative(path, base),
+        "size_bytes": _safe_file_size(path),
+        "top_level_type": None,
+        "top_level_keys": [],
+        "sample_item_keys": [],
+        "error": None,
+    }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        info["top_level_type"] = type(payload).__name__
+        if isinstance(payload, dict):
+            info["top_level_keys"] = [str(key) for key in list(payload.keys())[:MAX_JSON_KEYS]]
+        elif isinstance(payload, list) and payload:
+            first = payload[0]
+            if isinstance(first, dict):
+                info["sample_item_keys"] = [str(key) for key in list(first.keys())[:MAX_JSON_KEYS]]
+    except Exception as exc:  # pragma: no cover - defensive profiling path
+        info["error"] = f"{exc.__class__.__name__}: {exc}"
+    return info
+
+
+def _inspect_sqlite_file(path: Path, base: Path) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "path": _safe_relative(path, base),
+        "size_bytes": _safe_file_size(path),
+        "tables": [],
+        "error": None,
+    }
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+            table_rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+            for (table_name,) in table_rows[:MAX_SQLITE_TABLES]:
+                columns = conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+                info["tables"].append(
+                    {
+                        "name": table_name,
+                        "columns": [
+                            {"name": column[1], "type": column[2]} for column in columns[:MAX_COLUMNS_PER_TABLE]
+                        ],
+                    }
+                )
+    except Exception as exc:  # pragma: no cover - defensive profiling path
+        info["error"] = f"{exc.__class__.__name__}: {exc}"
+    return info
+
+
+def _inspect_doc_file(path: Path, base: Path) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "path": _safe_relative(path, base),
+        "size_bytes": _safe_file_size(path),
+        "suffix": path.suffix.lower(),
+        "preview": "",
+        "error": None,
+    }
+    if path.suffix.lower() not in {".md", ".txt"}:
+        return info
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        info["preview"] = _normalize_text(text)[:MAX_PREVIEW_CHARS]
+    except Exception as exc:  # pragma: no cover - defensive profiling path
+        info["error"] = f"{exc.__class__.__name__}: {exc}"
+    return info
+
+
+def build_schema_hints(
+    *,
+    task_dir: Path,
+    csv_files: list[Path],
+    db_files: list[Path],
+    json_files: list[Path],
+    doc_files: list[Path],
+) -> dict[str, Any]:
+    return {
+        "csv": [_inspect_csv_file(path, task_dir) for path in sorted(csv_files)[:MAX_SCHEMA_FILES_PER_TYPE]],
+        "db": [_inspect_sqlite_file(path, task_dir) for path in sorted(db_files)[:MAX_SCHEMA_FILES_PER_TYPE]],
+        "json": [_inspect_json_file(path, task_dir) for path in sorted(json_files)[:MAX_SCHEMA_FILES_PER_TYPE]],
+        "doc": [_inspect_doc_file(path, task_dir) for path in sorted(doc_files)[:MAX_SCHEMA_FILES_PER_TYPE]],
+    }
+
+
+def _empty_schema_hints() -> dict[str, Any]:
+    return {"csv": [], "db": [], "json": [], "doc": []}
+
+
 def profile_task_context(task_dir: Path) -> TaskContextProfile:
     metadata = load_task_metadata(task_dir)
     context_dir = task_dir / "context"
@@ -198,6 +320,7 @@ def profile_task_context(task_dir: Path) -> TaskContextProfile:
             estimated_context_size_bytes=0,
             file_counts={"csv": 0, "db": 0, "json": 0, "doc": 0, "knowledge": 0},
             question_signals=question_signals_to_dict(signals),
+            schema_hints=_empty_schema_hints(),
             risk_flags=risk_flags,
         )
 
@@ -250,6 +373,13 @@ def profile_task_context(task_dir: Path) -> TaskContextProfile:
         estimated_context_size_bytes=estimated_context_size_bytes,
         file_counts=file_counts,
         question_signals=question_signals_to_dict(signals),
+        schema_hints=build_schema_hints(
+            task_dir=task_dir,
+            csv_files=csv_files,
+            db_files=db_files,
+            json_files=json_files,
+            doc_files=doc_files,
+        ),
         risk_flags=risk_flags,
     )
 
