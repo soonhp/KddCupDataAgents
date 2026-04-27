@@ -1,0 +1,83 @@
+name: Auto merge after review
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate approval conditions
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.setOutput('enable', 'false');
+              return;
+            }
+
+            if (pr.draft) {
+              core.info('Draft PR is not eligible for auto-merge.');
+              core.setOutput('enable', 'false');
+              return;
+            }
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const latestByUser = new Map();
+            for (const review of reviews) {
+              latestByUser.set(review.user.login, review.state);
+            }
+
+            const states = [...latestByUser.values()];
+            const approvedCount = states.filter((s) => s === 'APPROVED').length;
+            const hasChangesRequested = states.includes('CHANGES_REQUESTED');
+
+            core.info(`approvedCount=${approvedCount}, hasChangesRequested=${hasChangesRequested}`);
+
+            if (approvedCount >= 1 && !hasChangesRequested) {
+              core.setOutput('enable', 'true');
+              return;
+            }
+
+            core.setOutput('enable', 'false');
+
+      - name: Enable auto-merge (squash)
+        if: steps.gate.outputs.enable == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const pullRequestId = pr.node_id;
+            await github.graphql(
+              `mutation($pullRequestId: ID!) {
+                enablePullRequestAutoMerge(input: {
+                  pullRequestId: $pullRequestId,
+                  mergeMethod: SQUASH
+                }) {
+                  pullRequest {
+                    number
+                    autoMergeRequest {
+                      enabledAt
+                    }
+                  }
+                }
+              }`,
+              { pullRequestId }
+            );
+            core.info(`Auto-merge enabled for PR #${pr.number}`);
