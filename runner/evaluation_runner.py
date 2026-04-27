@@ -12,6 +12,12 @@ import yaml
 from data_agent_baseline.config import load_app_config
 from data_agent_baseline.run.runner import create_run_output_dir, run_single_task
 
+from runner.failure_taxonomy import (
+    classify_task_failure,
+    failure_rollup_to_dict,
+    failure_taxonomy_to_dict,
+    rollup_failure_taxonomy,
+)
 from runner.task_intelligence import (
     decide_route,
     normalize_prediction_csv,
@@ -126,6 +132,7 @@ def run_evaluation(
 
     task_ids = _discover_task_ids(input_dir)
     summaries: list[TaskExecutionSummary] = []
+    failure_taxonomies: list = []
 
     for task_id in task_ids:
         task_dir = input_dir / task_id
@@ -157,6 +164,14 @@ def run_evaluation(
             encoding="utf-8",
         )
 
+        task_failure_taxonomy = classify_task_failure(
+            task_id=task_id,
+            succeeded=artifact.succeeded,
+            failure_reason=artifact.failure_reason,
+            verification_report=verification_report,
+        )
+        failure_taxonomies.append(task_failure_taxonomy)
+
         task_log_payload = {
             "task_id": task_id,
             "succeeded": artifact.succeeded,
@@ -166,6 +181,7 @@ def run_evaluation(
             "schema_memory": str(schema_memory_path),
             "route_decision": route_to_dict(route_decision),
             "verification": report_to_dict(verification_report),
+            "failure_taxonomy": failure_taxonomy_to_dict(task_failure_taxonomy),
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         }
         (task_logs_dir / "task.log.json").write_text(
@@ -184,6 +200,8 @@ def run_evaluation(
             )
         )
 
+    failure_rollup = rollup_failure_taxonomy(failure_taxonomies)
+
     summary_payload = {
         "run_id": run_id,
         "input_dir": str(input_dir),
@@ -192,6 +210,8 @@ def run_evaluation(
         "task_count": len(summaries),
         "succeeded_task_count": sum(1 for item in summaries if item.succeeded),
         "tasks": [asdict(item) for item in summaries],
+        "failure_taxonomy": [failure_taxonomy_to_dict(item) for item in failure_taxonomies],
+        "failure_rollup": failure_rollup_to_dict(failure_rollup),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     }
     (logs_dir / "run_summary.json").write_text(
