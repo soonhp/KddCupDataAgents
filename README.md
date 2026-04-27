@@ -22,6 +22,7 @@ KDD Cup 2026 Data Agents 대회 대응을 위한 분석/전략 문서를 `docs/`
 - 생성된 `prediction.csv`에 대해 null/공백 정규화를 수행합니다.
 - contract/sanity 기반 dual verification 결과를 `task.log.json`에 함께 남깁니다.
 - 실패 원인을 `runtime_timeout`, `output_contract_violation` 등 taxonomy tag로 분류해 task 로그와 `run_summary.json`에 집계합니다.
+- task마다 `run_summary.json`을 중간 checkpoint로 갱신하고, SIGTERM/SIGINT 수신 시 현재 task 종료 후 안전 중단(interrupted) 상태를 기록합니다.
 
 ### 2) Docker 제출 구조 (`docker/Dockerfile`)
 - 이미지 빌드 시 공식 starter-kit 저장소를 `git clone`으로 실제 가져옵니다.
