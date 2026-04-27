@@ -1,0 +1,53 @@
+name: Auto create PR from work
+
+on:
+  push:
+    branches: [work]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or reuse PR (work -> main)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const head = `${owner}:work`;
+            const base = 'main';
+
+            const existing = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head,
+              base,
+              per_page: 1,
+            });
+
+            if (existing.data.length > 0) {
+              core.info(`Open PR already exists: #${existing.data[0].number}`);
+              return;
+            }
+
+            const created = await github.rest.pulls.create({
+              owner,
+              repo,
+              title: 'chore: auto-sync work branch to main',
+              head: 'work',
+              base,
+              body: [
+                '## Auto-created PR',
+                '',
+                '- Trigger: push to `work` branch',
+                '- Purpose: keep autonomous agent workflow moving without manual PR button clicks',
+                '- Merge policy: review-gated auto-merge (squash) via repository workflows',
+              ].join('\n'),
+            });
+
+            core.info(`Created PR #${created.data.number}`);

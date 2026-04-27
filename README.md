@@ -61,6 +61,21 @@ python -m unittest discover -s tests -p 'test_*.py'
 - `tests/test_task_intelligence.py`: 라우팅/정규화/검증 회귀 테스트
 - `tests/test_failure_taxonomy.py`: 실패 taxonomy 분류 및 집계 회귀 테스트
 
+## work 브랜치 완전 자동화(PR 생성 → 리뷰 승인 → 자동 머지)
+
+수동으로 `PR 만들기` 버튼을 누르지 않아도 되도록, `work` 브랜치 기준 자동 승격 파이프라인을 추가했습니다.
+
+- `.github/workflows/auto-pr-from-work.yml`
+  - `work` 브랜치 push 시 `main` 대상 PR을 자동 생성(이미 열려 있으면 재사용)
+- `.github/workflows/auto-approve-work-pr.yml`
+  - `work -> main` PR을 `github-actions[bot]`이 자동 승인
+- `.github/workflows/auto-merge-after-review.yml`
+  - 승인 조건 충족 시 auto-merge(squash) 활성화
+- `.github/workflows/ci.yml`
+  - PR 체크(py_compile + unittest) 통과 시 브랜치 보호 규칙과 함께 최종 merge 진행
+
+> 참고: 실제 merge는 GitHub 브랜치 보호 규칙(필수 체크/리뷰 수) 충족 이후 수행됩니다.
+
 ## PR 리뷰 승인 후 자동 머지
 
 저장소의 `main` 대상 PR에 대해, 아래 조건을 만족하면 GitHub Actions가 auto-merge(squash)를 활성화하도록 설정했습니다.
