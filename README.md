@@ -71,4 +71,6 @@ python -m unittest discover -s tests -p 'test_*.py'
 
 워크플로 파일: `.github/workflows/auto-merge-after-review.yml`
 
+또한 PR/merge 안정성을 위해 `.github/workflows/ci.yml`에서 기본 검증(py_compile + unittest)을 실행하도록 추가했습니다.
+
 > 참고: 워크플로는 auto-merge를 "활성화"합니다. 실제 머지는 브랜치 보호 규칙(필수 체크, 리뷰 수 등)을 모두 만족한 뒤 GitHub가 수행합니다.
