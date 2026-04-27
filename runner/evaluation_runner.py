@@ -12,6 +12,15 @@ import yaml
 from data_agent_baseline.config import load_app_config
 from data_agent_baseline.run.runner import create_run_output_dir, run_single_task
 
+from runner.task_intelligence import (
+    decide_route,
+    normalize_prediction_csv,
+    profile_task_context,
+    profile_to_dict,
+    route_to_dict,
+)
+from runner.verification import report_to_dict, run_dual_verification
+
 
 @dataclass(slots=True)
 class TaskExecutionSummary:
@@ -119,6 +128,10 @@ def run_evaluation(
     summaries: list[TaskExecutionSummary] = []
 
     for task_id in task_ids:
+        task_dir = input_dir / task_id
+        task_profile = profile_task_context(task_dir)
+        route_decision = decide_route(task_profile)
+
         artifact = run_single_task(task_id=task_id, config=config, run_output_dir=run_output_dir)
 
         task_output_dir = output_dir / task_id
@@ -129,11 +142,20 @@ def run_evaluation(
         else:
             _write_fallback_prediction_csv(prediction_path)
 
+        normalize_prediction_csv(prediction_path)
+        verification_report = run_dual_verification(task_id, prediction_path)
+
         task_logs_dir = logs_dir / task_id
         task_logs_dir.mkdir(parents=True, exist_ok=True)
 
         trace_target_path = task_logs_dir / "trace.json"
         shutil.copy2(artifact.trace_path, trace_target_path)
+
+        schema_memory_path = task_logs_dir / "schema_memory.json"
+        schema_memory_path.write_text(
+            json.dumps(profile_to_dict(task_profile), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
         task_log_payload = {
             "task_id": task_id,
@@ -141,6 +163,9 @@ def run_evaluation(
             "failure_reason": artifact.failure_reason,
             "prediction_csv": str(prediction_path),
             "trace": str(trace_target_path),
+            "schema_memory": str(schema_memory_path),
+            "route_decision": route_to_dict(route_decision),
+            "verification": report_to_dict(verification_report),
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         }
         (task_logs_dir / "task.log.json").write_text(
