@@ -20,6 +20,7 @@ from runner.failure_taxonomy import (
     failure_taxonomy_to_dict,
     rollup_failure_taxonomy,
 )
+from runner.repair_executor import execute_repair_plan, repair_execution_report_to_dict
 from runner.repair_planner import build_repair_plan, repair_plan_to_dict
 from runner.semantic_review import semantic_review_report_to_dict, run_semantic_review
 from runner.task_intelligence import (
@@ -228,6 +229,34 @@ def run_evaluation(
                 semantic_review_report=semantic_review_report,
                 agent_review_report=agent_review_report,
             )
+            repair_execution_report = execute_repair_plan(
+                repair_plan=repair_plan,
+                prediction_path=prediction_path,
+                output_contract=output_contract,
+            )
+            if repair_execution_report.applied_count:
+                normalize_prediction_csv(prediction_path)
+                verification_report = run_dual_verification(task_id, prediction_path, output_contract=output_contract)
+                semantic_review_report = run_semantic_review(
+                    task_id=task_id,
+                    task_profile=task_profile,
+                    route_decision=route_decision,
+                    verification_report=verification_report,
+                    prediction_path=prediction_path,
+                )
+                agent_review_report = run_agent_review(
+                    task_id=task_id,
+                    task_profile=task_profile,
+                    route_decision=route_decision,
+                    verification_report=verification_report,
+                )
+                repair_plan = build_repair_plan(
+                    task_id=task_id,
+                    route_decision=route_decision,
+                    verification_report=verification_report,
+                    semantic_review_report=semantic_review_report,
+                    agent_review_report=agent_review_report,
+                )
 
             task_logs_dir = logs_dir / task_id
             task_logs_dir.mkdir(parents=True, exist_ok=True)
@@ -261,6 +290,7 @@ def run_evaluation(
                 "semantic_review": semantic_review_report_to_dict(semantic_review_report),
                 "agent_review": agent_review_report_to_dict(agent_review_report),
                 "repair_plan": repair_plan_to_dict(repair_plan),
+                "repair_execution": repair_execution_report_to_dict(repair_execution_report),
                 "failure_taxonomy": failure_taxonomy_to_dict(task_failure_taxonomy),
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             }
