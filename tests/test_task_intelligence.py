@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from runner.agent_review import run_agent_review
+from runner.repair_planner import build_repair_plan
 from runner.semantic_review import run_semantic_review
 from runner.task_intelligence import decide_route, infer_question_signals, normalize_prediction_csv, profile_task_context
 from runner.verification import infer_output_contract, run_dual_verification
@@ -377,6 +378,78 @@ class TaskIntelligenceTests(unittest.TestCase):
             )
             self.assertTrue(review.repair_recommendations)
             self.assertTrue(any(check.name == "document_grounding_check" and not check.passed for check in review.checks))
+
+    def test_repair_plan_not_required_for_clean_reviews(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_repair_clean"
+            _write_task(task_dir, question="Calculate the total revenue", extra={"expected_columns": ["answer"]})
+            (task_dir / "context" / "csv").mkdir(parents=True)
+            (task_dir / "context" / "csv" / "sales.csv").write_text("revenue\n10\n", encoding="utf-8")
+            profile = profile_task_context(task_dir)
+            route = decide_route(profile)
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("answer\n42\n", encoding="utf-8")
+            verification = run_dual_verification("task_repair_clean", prediction, infer_output_contract(task_dir))
+            semantic = run_semantic_review(
+                task_id="task_repair_clean",
+                task_profile=profile,
+                route_decision=route,
+                verification_report=verification,
+                prediction_path=prediction,
+            )
+            agent = run_agent_review(
+                task_id="task_repair_clean",
+                task_profile=profile,
+                route_decision=route,
+                verification_report=verification,
+            )
+
+            plan = build_repair_plan(
+                task_id="task_repair_clean",
+                route_decision=route,
+                verification_report=verification,
+                semantic_review_report=semantic,
+                agent_review_report=agent,
+            )
+            self.assertFalse(plan.should_repair)
+            self.assertEqual(plan.actions, [])
+
+    def test_repair_plan_prioritizes_contract_and_numeric_repairs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_repair_bad"
+            _write_task(task_dir, question="Compute the average revenue", extra={"expected_columns": ["answer"]})
+            (task_dir / "context" / "csv").mkdir(parents=True)
+            (task_dir / "context" / "csv" / "sales.csv").write_text("revenue\n10\n", encoding="utf-8")
+            profile = profile_task_context(task_dir)
+            route = decide_route(profile)
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("wrong_header\nnot available\n", encoding="utf-8")
+            verification = run_dual_verification("task_repair_bad", prediction, infer_output_contract(task_dir))
+            semantic = run_semantic_review(
+                task_id="task_repair_bad",
+                task_profile=profile,
+                route_decision=route,
+                verification_report=verification,
+                prediction_path=prediction,
+            )
+            agent = run_agent_review(
+                task_id="task_repair_bad",
+                task_profile=profile,
+                route_decision=route,
+                verification_report=verification,
+            )
+
+            plan = build_repair_plan(
+                task_id="task_repair_bad",
+                route_decision=route,
+                verification_report=verification,
+                semantic_review_report=semantic,
+                agent_review_report=agent,
+            )
+            self.assertTrue(plan.should_repair)
+            self.assertTrue(any(action.action_type == "fix_output_contract" for action in plan.actions))
+            self.assertTrue(any(action.action_type == "recompute_numeric_answer" for action in plan.actions))
+            self.assertLessEqual(plan.actions[0].priority, 20)
 
 
 if __name__ == "__main__":
