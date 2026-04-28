@@ -182,6 +182,37 @@ class TaskIntelligenceTests(unittest.TestCase):
             report = run_dual_verification("task_1", prediction)
             self.assertFalse(report.all_passed)
 
+    def test_verification_rejects_duplicate_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("answer,answer\n1,2\n", encoding="utf-8")
+            report = run_dual_verification("task_dup_header", prediction)
+            self.assertFalse(report.all_passed)
+            self.assertTrue(any(check.name == "contract_check" and not check.passed for check in report.checks))
+
+    def test_verification_rejects_traceback_like_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("answer\nTraceback: boom\n", encoding="utf-8")
+            report = run_dual_verification("task_traceback", prediction)
+            self.assertFalse(report.all_passed)
+            self.assertTrue(any("suspicious" in check.detail for check in report.checks))
+
+    def test_verification_rejects_single_empty_answer_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("answer\n\n", encoding="utf-8")
+            report = run_dual_verification("task_empty_answer", prediction)
+            self.assertFalse(report.all_passed)
+            self.assertTrue(any(check.name == "shape_check" and not check.passed for check in report.checks))
+
+    def test_verification_accepts_basic_non_empty_prediction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("answer\n42\n", encoding="utf-8")
+            report = run_dual_verification("task_valid", prediction)
+            self.assertTrue(report.all_passed)
+
 
 if __name__ == "__main__":
     unittest.main()
