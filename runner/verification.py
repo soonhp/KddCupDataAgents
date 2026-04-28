@@ -296,11 +296,14 @@ def _run_shape_check(rows: list[list[str]]) -> VerificationCheck:
         return _fail("shape_check", "cannot inspect shape without header")
 
     width = len(rows[0])
-    data_row_count = max(len(rows) - 1, 0)
+    data_rows = rows[1:]
+    data_row_count = len(data_rows)
     if width > 1000:
         return _fail("shape_check", f"too many columns ({width})")
-    if data_row_count == 1 and width == 1 and rows[1][0].strip() == "":
-        return _fail("shape_check", "single empty answer cell fallback output")
+    if data_row_count == 1 and width == 1:
+        first_row = data_rows[0]
+        if not first_row or first_row[0].strip() == "":
+            return _fail("shape_check", "single empty answer cell fallback output")
     return _pass("shape_check", f"{data_row_count} data rows, {width} columns")
 
 

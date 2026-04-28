@@ -121,20 +121,30 @@ def run_agent_review(
 
     task_contract_checks = [check for check in verification_report.checks if check.name == "task_contract_check"]
     failing_task_contract_checks = [check for check in task_contract_checks if not check.passed]
-    comments.append(
-        _comment(
-            "Answer Contract Agent",
-            passed=not failing_task_contract_checks,
-            severity="error" if failing_task_contract_checks else "info",
-            detail=(
-                failing_task_contract_checks[0].detail
-                if failing_task_contract_checks
-                else "task-specific output contract is satisfied or not available"
-            ),
+    if not task_contract_checks:
+        comments.append(
+            _comment(
+                "Answer Contract Agent",
+                passed=False,
+                severity="error",
+                detail="task-specific output contract check did not run",
+            )
         )
-    )
+    else:
+        comments.append(
+            _comment(
+                "Answer Contract Agent",
+                passed=not failing_task_contract_checks,
+                severity="error" if failing_task_contract_checks else "info",
+                detail=(
+                    failing_task_contract_checks[0].detail
+                    if failing_task_contract_checks
+                    else "task-specific output contract is satisfied or explicitly unavailable"
+                ),
+            )
+        )
 
-    all_passed = all(comment.passed or comment.severity == "warning" for comment in comments)
+    all_passed = all(comment.passed for comment in comments)
     return AgentReviewReport(task_id=task_id, all_passed=all_passed, comments=comments)
 
 
