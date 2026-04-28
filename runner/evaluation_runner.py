@@ -13,6 +13,7 @@ import yaml
 from data_agent_baseline.config import load_app_config
 from data_agent_baseline.run.runner import create_run_output_dir, run_single_task
 
+from runner.agent_review import agent_review_report_to_dict, run_agent_review
 from runner.failure_taxonomy import (
     classify_task_failure,
     failure_rollup_to_dict,
@@ -205,6 +206,12 @@ def run_evaluation(
 
             normalize_prediction_csv(prediction_path)
             verification_report = run_dual_verification(task_id, prediction_path, output_contract=output_contract)
+            agent_review_report = run_agent_review(
+                task_id=task_id,
+                task_profile=task_profile,
+                route_decision=route_decision,
+                verification_report=verification_report,
+            )
 
             task_logs_dir = logs_dir / task_id
             task_logs_dir.mkdir(parents=True, exist_ok=True)
@@ -235,6 +242,7 @@ def run_evaluation(
                 "schema_memory": str(schema_memory_path),
                 "route_decision": route_to_dict(route_decision),
                 "verification": report_to_dict(verification_report),
+                "agent_review": agent_review_report_to_dict(agent_review_report),
                 "failure_taxonomy": failure_taxonomy_to_dict(task_failure_taxonomy),
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             }
