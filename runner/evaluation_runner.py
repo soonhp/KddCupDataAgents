@@ -26,7 +26,7 @@ from runner.task_intelligence import (
     profile_to_dict,
     route_to_dict,
 )
-from runner.verification import report_to_dict, run_dual_verification
+from runner.verification import infer_output_contract, report_to_dict, run_dual_verification
 
 
 @dataclass(slots=True)
@@ -191,6 +191,7 @@ def run_evaluation(
             task_dir = input_dir / task_id
             task_profile = profile_task_context(task_dir)
             route_decision = decide_route(task_profile)
+            output_contract = infer_output_contract(task_dir)
 
             artifact = run_single_task(task_id=task_id, config=config, run_output_dir=run_output_dir)
 
@@ -203,7 +204,7 @@ def run_evaluation(
                 _write_fallback_prediction_csv(prediction_path)
 
             normalize_prediction_csv(prediction_path)
-            verification_report = run_dual_verification(task_id, prediction_path)
+            verification_report = run_dual_verification(task_id, prediction_path, output_contract=output_contract)
 
             task_logs_dir = logs_dir / task_id
             task_logs_dir.mkdir(parents=True, exist_ok=True)
