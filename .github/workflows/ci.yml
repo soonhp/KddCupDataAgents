@@ -28,6 +28,7 @@ jobs:
             runner/task_intelligence.py \
             runner/verification.py \
             runner/agent_review.py \
+            runner/semantic_review.py \
             runner/failure_taxonomy.py \
             runner/__init__.py \
             tests/test_task_intelligence.py \

@@ -20,6 +20,7 @@ from runner.failure_taxonomy import (
     failure_taxonomy_to_dict,
     rollup_failure_taxonomy,
 )
+from runner.semantic_review import semantic_review_report_to_dict, run_semantic_review
 from runner.task_intelligence import (
     decide_route,
     normalize_prediction_csv,
@@ -206,6 +207,13 @@ def run_evaluation(
 
             normalize_prediction_csv(prediction_path)
             verification_report = run_dual_verification(task_id, prediction_path, output_contract=output_contract)
+            semantic_review_report = run_semantic_review(
+                task_id=task_id,
+                task_profile=task_profile,
+                route_decision=route_decision,
+                verification_report=verification_report,
+                prediction_path=prediction_path,
+            )
             agent_review_report = run_agent_review(
                 task_id=task_id,
                 task_profile=task_profile,
@@ -242,6 +250,7 @@ def run_evaluation(
                 "schema_memory": str(schema_memory_path),
                 "route_decision": route_to_dict(route_decision),
                 "verification": report_to_dict(verification_report),
+                "semantic_review": semantic_review_report_to_dict(semantic_review_report),
                 "agent_review": agent_review_report_to_dict(agent_review_report),
                 "failure_taxonomy": failure_taxonomy_to_dict(task_failure_taxonomy),
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),

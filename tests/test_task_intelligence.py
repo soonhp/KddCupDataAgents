@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from runner.agent_review import run_agent_review
+from runner.semantic_review import run_semantic_review
 from runner.task_intelligence import decide_route, infer_question_signals, normalize_prediction_csv, profile_task_context
 from runner.verification import infer_output_contract, run_dual_verification
 
@@ -309,6 +310,73 @@ class TaskIntelligenceTests(unittest.TestCase):
             failed_agents = {comment.agent for comment in review.comments if not comment.passed}
             self.assertIn("Verifier Agent", failed_agents)
             self.assertIn("Answer Contract Agent", failed_agents)
+
+    def test_semantic_review_passes_numeric_prediction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_semantic_numeric"
+            _write_task(task_dir, question="Calculate the total revenue")
+            (task_dir / "context" / "csv").mkdir(parents=True)
+            (task_dir / "context" / "csv" / "sales.csv").write_text("revenue\n10\n", encoding="utf-8")
+            profile = profile_task_context(task_dir)
+            route = decide_route(profile)
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("answer\n42\n", encoding="utf-8")
+            verification = run_dual_verification("task_semantic_numeric", prediction)
+
+            review = run_semantic_review(
+                task_id="task_semantic_numeric",
+                task_profile=profile,
+                route_decision=route,
+                verification_report=verification,
+                prediction_path=prediction,
+            )
+            self.assertTrue(review.all_passed)
+            self.assertTrue(any(check.name == "numeric_intent_check" for check in review.checks))
+
+    def test_semantic_review_recommends_repair_for_non_numeric_numeric_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_semantic_bad_numeric"
+            _write_task(task_dir, question="Compute the average revenue")
+            (task_dir / "context" / "csv").mkdir(parents=True)
+            (task_dir / "context" / "csv" / "sales.csv").write_text("revenue\n10\n", encoding="utf-8")
+            profile = profile_task_context(task_dir)
+            route = decide_route(profile)
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("answer\nnot available\n", encoding="utf-8")
+            verification = run_dual_verification("task_semantic_bad_numeric", prediction)
+
+            review = run_semantic_review(
+                task_id="task_semantic_bad_numeric",
+                task_profile=profile,
+                route_decision=route,
+                verification_report=verification,
+                prediction_path=prediction,
+            )
+            self.assertTrue(review.all_passed)
+            self.assertTrue(review.repair_recommendations)
+            self.assertTrue(any(check.name == "numeric_intent_check" and not check.passed for check in review.checks))
+
+    def test_semantic_review_flags_document_signal_without_document_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_semantic_doc_missing"
+            _write_task(task_dir, question="According to the policy, explain the definition")
+            (task_dir / "context" / "csv").mkdir(parents=True)
+            (task_dir / "context" / "csv" / "data.csv").write_text("x\n1\n", encoding="utf-8")
+            profile = profile_task_context(task_dir)
+            route = decide_route(profile)
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("answer\nSome explanation\n", encoding="utf-8")
+            verification = run_dual_verification("task_semantic_doc_missing", prediction)
+
+            review = run_semantic_review(
+                task_id="task_semantic_doc_missing",
+                task_profile=profile,
+                route_decision=route,
+                verification_report=verification,
+                prediction_path=prediction,
+            )
+            self.assertTrue(review.repair_recommendations)
+            self.assertTrue(any(check.name == "document_grounding_check" and not check.passed for check in review.checks))
 
 
 if __name__ == "__main__":
