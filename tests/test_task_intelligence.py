@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from runner.agent_review import run_agent_review
 from runner.task_intelligence import decide_route, infer_question_signals, normalize_prediction_csv, profile_task_context
 from runner.verification import infer_output_contract, run_dual_verification
 
@@ -258,6 +259,56 @@ class TaskIntelligenceTests(unittest.TestCase):
             self.assertIsNotNone(contract)
             assert contract is not None
             self.assertEqual(contract.expected_columns, ["company", "revenue"])
+
+    def test_agent_review_passes_clean_task_with_valid_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_agent_ok"
+            _write_task(task_dir, question="Return a CSV with columns: answer", extra={"expected_columns": ["answer"]})
+            (task_dir / "context" / "csv").mkdir(parents=True)
+            (task_dir / "context" / "csv" / "data.csv").write_text("x\n1\n", encoding="utf-8")
+            profile = profile_task_context(task_dir)
+            route = decide_route(profile)
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("answer\n42\n", encoding="utf-8")
+            verification = run_dual_verification("task_agent_ok", prediction, output_contract=infer_output_contract(task_dir))
+
+            review = run_agent_review(
+                task_id="task_agent_ok",
+                task_profile=profile,
+                route_decision=route,
+                verification_report=verification,
+            )
+            self.assertTrue(review.all_passed)
+            self.assertEqual({comment.agent for comment in review.comments}, {
+                "PM Agent",
+                "Planner Agent",
+                "Data Profiling Agent",
+                "Verifier Agent",
+                "Answer Contract Agent",
+            })
+
+    def test_agent_review_flags_verifier_and_contract_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_agent_bad"
+            _write_task(task_dir, question="Return a CSV with columns: name, score", extra={"expected_columns": ["name", "score"]})
+            (task_dir / "context" / "csv").mkdir(parents=True)
+            (task_dir / "context" / "csv" / "data.csv").write_text("x\n1\n", encoding="utf-8")
+            profile = profile_task_context(task_dir)
+            route = decide_route(profile)
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("name\nalice\n", encoding="utf-8")
+            verification = run_dual_verification("task_agent_bad", prediction, output_contract=infer_output_contract(task_dir))
+
+            review = run_agent_review(
+                task_id="task_agent_bad",
+                task_profile=profile,
+                route_decision=route,
+                verification_report=verification,
+            )
+            self.assertFalse(review.all_passed)
+            failed_agents = {comment.agent for comment in review.comments if not comment.passed}
+            self.assertIn("Verifier Agent", failed_agents)
+            self.assertIn("Answer Contract Agent", failed_agents)
 
 
 if __name__ == "__main__":
