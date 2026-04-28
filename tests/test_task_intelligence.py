@@ -8,15 +8,21 @@ import unittest
 from pathlib import Path
 
 from runner.task_intelligence import decide_route, infer_question_signals, normalize_prediction_csv, profile_task_context
-from runner.verification import run_dual_verification
+from runner.verification import infer_output_contract, run_dual_verification
 
 
-def _write_task(task_dir: Path, *, question: str = "", difficulty: str = "medium") -> None:
+def _write_task(
+    task_dir: Path,
+    *,
+    question: str = "",
+    difficulty: str = "medium",
+    extra: dict | None = None,
+) -> None:
     task_dir.mkdir(parents=True, exist_ok=True)
-    (task_dir / "task.json").write_text(
-        json.dumps({"task_id": task_dir.name, "difficulty": difficulty, "question": question}),
-        encoding="utf-8",
-    )
+    payload = {"task_id": task_dir.name, "difficulty": difficulty, "question": question}
+    if extra:
+        payload.update(extra)
+    (task_dir / "task.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 class TaskIntelligenceTests(unittest.TestCase):
@@ -212,6 +218,46 @@ class TaskIntelligenceTests(unittest.TestCase):
             prediction.write_text("answer\n42\n", encoding="utf-8")
             report = run_dual_verification("task_valid", prediction)
             self.assertTrue(report.all_passed)
+
+    def test_infer_output_contract_from_task_json_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_contract"
+            _write_task(task_dir, extra={"expected_columns": ["name", "score"], "min_rows": 1, "max_rows": 2})
+            contract = infer_output_contract(task_dir)
+            self.assertIsNotNone(contract)
+            assert contract is not None
+            self.assertEqual(contract.expected_columns, ["name", "score"])
+            self.assertEqual(contract.min_rows, 1)
+            self.assertEqual(contract.max_rows, 2)
+
+    def test_task_contract_accepts_matching_prediction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_contract_ok"
+            _write_task(task_dir, extra={"output_schema": {"columns": ["name", "score"]}})
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("name,score\nalice,10\n", encoding="utf-8")
+            report = run_dual_verification("task_contract_ok", prediction, output_contract=infer_output_contract(task_dir))
+            self.assertTrue(report.all_passed)
+            self.assertIsNotNone(report.output_contract)
+
+    def test_task_contract_rejects_missing_expected_column(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_contract_bad"
+            _write_task(task_dir, extra={"expected_columns": ["name", "score"]})
+            prediction = Path(tmp) / "prediction.csv"
+            prediction.write_text("name\nalice\n", encoding="utf-8")
+            report = run_dual_verification("task_contract_bad", prediction, output_contract=infer_output_contract(task_dir))
+            self.assertFalse(report.all_passed)
+            self.assertTrue(any(check.name == "task_contract_check" and not check.passed for check in report.checks))
+
+    def test_task_contract_can_be_inferred_from_question(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "task_contract_question"
+            _write_task(task_dir, question="Return a CSV with columns: company, revenue")
+            contract = infer_output_contract(task_dir)
+            self.assertIsNotNone(contract)
+            assert contract is not None
+            self.assertEqual(contract.expected_columns, ["company", "revenue"])
 
 
 if __name__ == "__main__":
