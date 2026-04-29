@@ -22,6 +22,7 @@ from runner.failure_taxonomy import (
 )
 from runner.repair_executor import execute_repair_plan, repair_execution_report_to_dict
 from runner.repair_planner import build_repair_plan, repair_plan_to_dict
+from runner.retry_executor import build_retry_decision, retry_decision_to_dict
 from runner.semantic_review import semantic_review_report_to_dict, run_semantic_review
 from runner.task_intelligence import (
     decide_route,
@@ -257,6 +258,12 @@ def run_evaluation(
                     semantic_review_report=semantic_review_report,
                     agent_review_report=agent_review_report,
                 )
+            retry_decision = build_retry_decision(
+                task_id=task_id,
+                route_decision=route_decision,
+                repair_plan=repair_plan,
+                repair_execution_report=repair_execution_report,
+            )
 
             task_logs_dir = logs_dir / task_id
             task_logs_dir.mkdir(parents=True, exist_ok=True)
@@ -291,6 +298,7 @@ def run_evaluation(
                 "agent_review": agent_review_report_to_dict(agent_review_report),
                 "repair_plan": repair_plan_to_dict(repair_plan),
                 "repair_execution": repair_execution_report_to_dict(repair_execution_report),
+                "retry_decision": retry_decision_to_dict(retry_decision),
                 "failure_taxonomy": failure_taxonomy_to_dict(task_failure_taxonomy),
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             }
