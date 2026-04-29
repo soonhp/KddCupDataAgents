@@ -36,6 +36,20 @@ def _get_attr_or_key(value: Any, name: str, default: Any = None) -> Any:
     return getattr(value, name, default)
 
 
+def _focus_for_action(action_type: str) -> str:
+    if action_type == "recompute_numeric_answer":
+        return "numeric_recompute"
+    if action_type == "regenerate_tabular_comparison":
+        return "tabular_regeneration"
+    if action_type == "restore_document_grounding":
+        return "document_grounding"
+    if action_type == "expand_hybrid_tool_plan":
+        return "hybrid_tooling"
+    if action_type in {"fix_output_contract", "fix_task_contract"}:
+        return "output_contract"
+    return "verification"
+
+
 def build_retry_decision(
     *,
     task_id: str,
@@ -52,37 +66,21 @@ def build_retry_decision(
 
     route = str(_get_attr_or_key(route_decision, "route", "unknown"))
     recommended_tools = list(_get_attr_or_key(route_decision, "recommended_tools", []) or [])
-    risk_flags = list(_get_attr_or_key(route_decision, "risk_flags", []) or [])
-
     applied_count = repair_execution_report.applied_count
-    unresolved_steps = [step for step in repair_execution_report.steps if step.status in {"planned", "skipped"}]
+
     instructions: list[RetryInstruction] = []
-
-    for index, step in enumerate(unresolved_steps, start=1):
-        focus = "verification"
-        if step.action_type == "recompute_numeric_answer":
-            focus = "numeric_recompute"
-        elif step.action_type == "regenerate_tabular_comparison":
-            focus = "tabular_regeneration"
-        elif step.action_type == "restore_document_grounding":
-            focus = "document_grounding"
-        elif step.action_type == "expand_hybrid_tool_plan":
-            focus = "hybrid_tooling"
-        elif step.action_type in {"fix_output_contract", "fix_task_contract"}:
-            focus = "output_contract"
-
-        detail = f"route={route}; tools={recommended_tools}; action={step.action_type}; {step.detail}"
-        instructions.append(_instruction(index * 10, step.owner_agent, focus, detail))
-
-    if risk_flags:
-        instructions.append(
-            _instruction(
-                90,
-                "PM Agent",
-                "route_risk_review",
-                "Route risk flags remain for retry orchestration: " + ", ".join(risk_flags),
-            )
+    latest_actions = list(_get_attr_or_key(repair_plan, "actions", []) or [])
+    for action in latest_actions:
+        action_type = str(_get_attr_or_key(action, "action_type", "verification"))
+        owner_agent = str(_get_attr_or_key(action, "owner_agent", "Verifier Agent"))
+        priority = int(_get_attr_or_key(action, "priority", 100))
+        detail = str(_get_attr_or_key(action, "detail", ""))
+        blocking = bool(_get_attr_or_key(action, "blocking", False))
+        focus = _focus_for_action(action_type)
+        retry_detail = (
+            f"route={route}; tools={recommended_tools}; action={action_type}; blocking={blocking}; {detail}"
         )
+        instructions.append(_instruction(priority, owner_agent, focus, retry_detail))
 
     instructions = sorted(instructions, key=lambda item: (item.priority, item.owner_agent, item.focus, item.detail))
     deduped: list[RetryInstruction] = []
