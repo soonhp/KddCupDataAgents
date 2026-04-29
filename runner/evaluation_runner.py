@@ -14,6 +14,7 @@ from data_agent_baseline.config import load_app_config
 from data_agent_baseline.run.runner import create_run_output_dir, run_single_task
 
 from runner.agent_review import agent_review_report_to_dict, run_agent_review
+from runner.attempt_selector import attempt_selection_to_dict, build_attempt_evaluation, select_best_attempt
 from runner.failure_taxonomy import (
     classify_task_failure,
     failure_rollup_to_dict,
@@ -223,6 +224,12 @@ def run_evaluation(
                 route_decision=route_decision,
                 verification_report=verification_report,
             )
+            original_attempt_evaluation = build_attempt_evaluation(
+                attempt_name="original",
+                verification_report=verification_report,
+                semantic_review_report=semantic_review_report,
+                agent_review_report=agent_review_report,
+            )
             repair_plan = build_repair_plan(
                 task_id=task_id,
                 route_decision=route_decision,
@@ -258,6 +265,14 @@ def run_evaluation(
                     semantic_review_report=semantic_review_report,
                     agent_review_report=agent_review_report,
                 )
+
+            current_attempt_evaluation = build_attempt_evaluation(
+                attempt_name="post_repair",
+                verification_report=verification_report,
+                semantic_review_report=semantic_review_report,
+                agent_review_report=agent_review_report,
+            )
+            attempt_selection = select_best_attempt(original_attempt_evaluation, current_attempt_evaluation)
 
             retry_decision = build_retry_decision(
                 repair_plan=repair_plan,
@@ -306,6 +321,7 @@ def run_evaluation(
                 "verification": report_to_dict(verification_report),
                 "semantic_review": semantic_review_report_to_dict(semantic_review_report),
                 "agent_review": agent_review_report_to_dict(agent_review_report),
+                "attempt_selection": attempt_selection_to_dict(attempt_selection),
                 "repair_plan": repair_plan_to_dict(repair_plan),
                 "repair_execution": repair_execution_report_to_dict(repair_execution_report),
                 "retry_decision": retry_decision_to_dict(retry_decision),
