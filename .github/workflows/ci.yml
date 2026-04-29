@@ -38,6 +38,7 @@ jobs:
             tests/test_task_intelligence.py \
             tests/test_repair_executor.py \
             tests/test_retry_orchestrator.py \
+            tests/test_attempt_selector.py \
             tests/test_failure_taxonomy.py
 
       - name: Run unittest regression suite
