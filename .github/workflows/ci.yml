@@ -32,6 +32,7 @@ jobs:
             runner/repair_planner.py \
             runner/repair_executor.py \
             runner/retry_orchestrator.py \
+            runner/attempt_selector.py \
             runner/failure_taxonomy.py \
             runner/__init__.py \
             tests/test_task_intelligence.py \
