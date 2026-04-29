@@ -21,7 +21,17 @@ class AttemptEvaluation:
 class AttemptSelection:
     selected_attempt: str
     rationale: str
+    candidate_count: int
+    has_retry_attempt: bool
     candidates: list[AttemptEvaluation]
+
+
+@dataclass(slots=True)
+class AttemptSelectionPlan:
+    expected_retry_attempt_name: str
+    retry_attempt_prediction_path: str
+    compare_with_existing_attempts: bool
+    note: str
 
 
 def _failed_verification_count(report: VerificationReport) -> int:
@@ -56,6 +66,15 @@ def build_attempt_evaluation(
     )
 
 
+def build_attempt_selection_plan(*, retry_attempt_prediction_path: str) -> AttemptSelectionPlan:
+    return AttemptSelectionPlan(
+        expected_retry_attempt_name="retry",
+        retry_attempt_prediction_path=retry_attempt_prediction_path,
+        compare_with_existing_attempts=True,
+        note="When retry execution produces a prediction file, compare original/post_repair/retry with the same deterministic selector.",
+    )
+
+
 def select_best_attempt(*evaluations: AttemptEvaluation) -> AttemptSelection:
     if not evaluations:
         raise ValueError("at least one attempt evaluation is required")
@@ -71,12 +90,24 @@ def select_best_attempt(*evaluations: AttemptEvaluation) -> AttemptSelection:
         ),
     )
     winner = ordered[0]
+    has_retry_attempt = any(item.attempt_name == "retry" for item in ordered)
     rationale = (
         f"selected {winner.attempt_name} with failure tuple "
-        f"({winner.failed_verification_checks}, {winner.failed_agent_reviews}, {winner.failed_semantic_checks})"
+        f"({winner.failed_verification_checks}, {winner.failed_agent_reviews}, {winner.failed_semantic_checks}) "
+        f"across {len(ordered)} attempt(s)"
     )
-    return AttemptSelection(selected_attempt=winner.attempt_name, rationale=rationale, candidates=list(ordered))
+    return AttemptSelection(
+        selected_attempt=winner.attempt_name,
+        rationale=rationale,
+        candidate_count=len(ordered),
+        has_retry_attempt=has_retry_attempt,
+        candidates=list(ordered),
+    )
 
 
 def attempt_selection_to_dict(selection: AttemptSelection) -> dict[str, Any]:
     return asdict(selection)
+
+
+def attempt_selection_plan_to_dict(plan: AttemptSelectionPlan) -> dict[str, Any]:
+    return asdict(plan)
