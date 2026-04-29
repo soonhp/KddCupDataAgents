@@ -36,6 +36,7 @@ jobs:
             runner/__init__.py \
             tests/test_task_intelligence.py \
             tests/test_repair_executor.py \
+            tests/test_retry_executor.py \
             tests/test_failure_taxonomy.py
 
       - name: Run unittest regression suite
