@@ -29,7 +29,14 @@ from runner.failure_taxonomy import (
 )
 from runner.repair_executor import execute_repair_plan, repair_execution_report_to_dict
 from runner.repair_planner import build_repair_plan, repair_plan_to_dict
-from runner.retry_orchestrator import prepare_retry_artifacts, retry_decision_to_dict, build_retry_decision
+from runner.retry_orchestrator import (
+    build_retry_decision,
+    compare_attempts,
+    prepare_retry_artifacts,
+    retry_comparison_to_dict,
+    retry_decision_to_dict,
+)
+from runner.retry_runner import retry_attempt_result_to_dict, run_retry_attempt
 from runner.semantic_review import semantic_review_report_to_dict, run_semantic_review
 from runner.task_intelligence import (
     decide_route,
@@ -272,13 +279,13 @@ def run_evaluation(
                     agent_review_report=agent_review_report,
                 )
 
-            current_attempt_evaluation = build_attempt_evaluation(
+            post_repair_attempt_evaluation = build_attempt_evaluation(
                 attempt_name="post_repair",
                 verification_report=verification_report,
                 semantic_review_report=semantic_review_report,
                 agent_review_report=agent_review_report,
             )
-            attempt_selection = select_best_attempt(original_attempt_evaluation, current_attempt_evaluation)
+            attempt_selection = select_best_attempt(original_attempt_evaluation, post_repair_attempt_evaluation)
 
             retry_decision = build_retry_decision(
                 repair_plan=repair_plan,
@@ -289,6 +296,8 @@ def run_evaluation(
             )
             retry_artifacts = None
             attempt_selection_plan = None
+            retry_attempt_result = None
+            retry_comparison = None
             if retry_decision.should_retry:
                 retry_root = artifact_root / "retry_input"
                 retry_artifacts = prepare_retry_artifacts(
@@ -301,12 +310,51 @@ def run_evaluation(
                 attempt_selection_plan = build_attempt_selection_plan(
                     retry_attempt_prediction_path=retry_prediction_path,
                 )
+                retry_attempt_result = run_retry_attempt(
+                    task_id=task_id,
+                    retry_task_dir=retry_artifacts.retry_task_dir,
+                    task_output_dir=task_output_dir,
+                    artifact_root=artifact_root,
+                    model_name=model_name,
+                    api_base=api_base,
+                    api_key=api_key,
+                    task_timeout_seconds=task_timeout_seconds,
+                    run_id=run_id,
+                    task_profile=task_profile,
+                    route_decision=route_decision,
+                    output_contract=output_contract,
+                    starter_config_builder=_build_starter_config,
+                )
+                if retry_attempt_result.attempted and retry_attempt_result.attempt_evaluation is not None:
+                    retry_comparison = compare_attempts(
+                        original_verification_report=verification_report,
+                        retried_verification_report=retry_attempt_result.verification_report,
+                        original_semantic_review_report=semantic_review_report,
+                        retried_semantic_review_report=retry_attempt_result.semantic_review_report,
+                        original_agent_review_report=agent_review_report,
+                        retried_agent_review_report=retry_attempt_result.agent_review_report,
+                    )
+                    attempt_selection = select_best_attempt(
+                        original_attempt_evaluation,
+                        post_repair_attempt_evaluation,
+                        retry_attempt_result.attempt_evaluation,
+                    )
+                    if attempt_selection.selected_attempt == "retry" and retry_attempt_result.prediction_path:
+                        shutil.copy2(retry_attempt_result.prediction_path, prediction_path)
+                        normalize_prediction_csv(prediction_path)
+                        verification_report = retry_attempt_result.verification_report
+                        semantic_review_report = retry_attempt_result.semantic_review_report
+                        agent_review_report = retry_attempt_result.agent_review_report
 
             task_logs_dir = logs_dir / task_id
             task_logs_dir.mkdir(parents=True, exist_ok=True)
 
             trace_target_path = task_logs_dir / "trace.json"
             shutil.copy2(artifact.trace_path, trace_target_path)
+            retry_trace_target_path = None
+            if retry_attempt_result and retry_attempt_result.trace_path:
+                retry_trace_target_path = task_logs_dir / "trace.retry.json"
+                shutil.copy2(retry_attempt_result.trace_path, retry_trace_target_path)
 
             schema_memory_path = task_logs_dir / "schema_memory.json"
             schema_memory_path.write_text(
@@ -328,6 +376,7 @@ def run_evaluation(
                 "failure_reason": artifact.failure_reason,
                 "prediction_csv": str(prediction_path),
                 "trace": str(trace_target_path),
+                "retry_trace": str(retry_trace_target_path) if retry_trace_target_path else None,
                 "schema_memory": str(schema_memory_path),
                 "route_decision": route_to_dict(route_decision),
                 "verification": report_to_dict(verification_report),
@@ -346,6 +395,12 @@ def run_evaluation(
                     "retry_plan_path": str(retry_artifacts.retry_plan_path),
                 }
                 if retry_artifacts
+                else None,
+                "retry_attempt": retry_attempt_result_to_dict(retry_attempt_result)
+                if retry_attempt_result
+                else None,
+                "retry_comparison": retry_comparison_to_dict(retry_comparison)
+                if retry_comparison
                 else None,
                 "failure_taxonomy": failure_taxonomy_to_dict(task_failure_taxonomy),
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
