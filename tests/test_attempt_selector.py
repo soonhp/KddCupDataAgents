@@ -56,6 +56,7 @@ class AttemptSelectorTests(unittest.TestCase):
             )
             self.assertGreater(evaluation.failed_verification_checks, 0)
             self.assertGreater(evaluation.total_penalty, 0)
+            self.assertGreaterEqual(evaluation.failed_semantic_warning_checks, 0)
 
     def test_select_best_attempt_prefers_lower_failure_tuple(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -118,6 +119,33 @@ class AttemptSelectorTests(unittest.TestCase):
             selection = select_best_attempt(bad_eval, good_eval)
             self.assertEqual(selection.selected_attempt, "post_repair")
             self.assertEqual(selection.candidates[0].attempt_name, "post_repair")
+            self.assertIn("winner tuple=", selection.rationale)
+
+    def test_attempt_selection_prefers_fewer_semantic_errors_over_warnings(self) -> None:
+        from runner.attempt_selector import AttemptEvaluation
+
+        candidate_a = AttemptEvaluation(
+            attempt_name="post_repair",
+            failed_verification_checks=0,
+            failed_agent_reviews=0,
+            failed_semantic_checks=2,
+            failed_semantic_error_checks=1,
+            failed_semantic_warning_checks=1,
+            total_penalty=11,
+        )
+        candidate_b = AttemptEvaluation(
+            attempt_name="retry",
+            failed_verification_checks=0,
+            failed_agent_reviews=0,
+            failed_semantic_checks=2,
+            failed_semantic_error_checks=0,
+            failed_semantic_warning_checks=2,
+            total_penalty=2,
+        )
+
+        selection = select_best_attempt(candidate_a, candidate_b)
+        self.assertEqual(selection.selected_attempt, "retry")
+        self.assertIn("semantic_error=0", selection.rationale)
 
 
 if __name__ == "__main__":
