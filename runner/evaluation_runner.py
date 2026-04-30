@@ -285,6 +285,7 @@ def run_evaluation(
                 verification_report=verification_report,
                 semantic_review_report=semantic_review_report,
                 agent_review_report=agent_review_report,
+                route_decision=route_decision,
             )
             retry_artifacts = None
             attempt_selection_plan = None

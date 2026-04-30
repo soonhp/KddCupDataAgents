@@ -61,6 +61,7 @@ class RetryOrchestratorTests(unittest.TestCase):
                 verification_report=verification,
                 semantic_review_report=semantic,
                 agent_review_report=agent,
+                route_decision=route,
             )
             self.assertFalse(retry_decision.should_retry)
             self.assertEqual(retry_decision.max_retry_count, 0)
@@ -104,9 +105,11 @@ class RetryOrchestratorTests(unittest.TestCase):
                 verification_report=verification,
                 semantic_review_report=semantic,
                 agent_review_report=agent,
+                route_decision=route,
             )
             self.assertTrue(retry_decision.should_retry)
             self.assertTrue(retry_decision.retry_instructions)
+            self.assertTrue(any("route=" in instruction for instruction in retry_decision.retry_instructions))
 
             retry_root = Path(tmp) / "retry_root"
             artifacts = prepare_retry_artifacts(

@@ -68,28 +68,55 @@ def _failed_semantic_count(report: SemanticReviewReport) -> int:
     return sum(1 for check in report.checks if not check.passed)
 
 
+def _build_route_context_suffix(route_decision: Any | None) -> str:
+    if route_decision is None:
+        return ""
+    route = str(_get_attr_or_key(route_decision, "route", "")).strip()
+    recommended_tools = list(_get_attr_or_key(route_decision, "recommended_tools", []) or [])
+    risk_flags = list(_get_attr_or_key(route_decision, "risk_flags", []) or [])
+    parts: list[str] = []
+    if route:
+        parts.append(f"route={route}")
+    if recommended_tools:
+        parts.append(f"tools={recommended_tools}")
+    if risk_flags:
+        parts.append(f"risk_flags={risk_flags}")
+    return f" [{' ; '.join(parts)}]" if parts else ""
+
+
 def build_retry_decision(
     *,
     repair_plan: RepairPlan,
     verification_report: VerificationReport,
     semantic_review_report: SemanticReviewReport,
     agent_review_report: AgentReviewReport,
+    route_decision: Any | None = None,
 ) -> RetryDecision:
     retry_instructions: list[str] = []
     retryable_actions = [action for action in repair_plan.actions if action.action_type in RETRYABLE_ACTIONS]
+    route_context_suffix = _build_route_context_suffix(route_decision)
     if retryable_actions:
         retry_instructions.extend(
-            f"[{action.owner_agent}] {action.action_type}: {action.detail}" for action in retryable_actions
+            f"[{action.owner_agent}] {action.action_type}: {action.detail}{route_context_suffix}"
+            for action in retryable_actions
         )
 
     if not verification_report.all_passed:
-        retry_instructions.append("Fix verification failures before trusting the next attempt.")
+        retry_instructions.append(f"Fix verification failures before trusting the next attempt.{route_context_suffix}")
     if semantic_review_report.repair_recommendations:
-        retry_instructions.extend(semantic_review_report.repair_recommendations)
+        retry_instructions.extend(f"{instruction}{route_context_suffix}" for instruction in semantic_review_report.repair_recommendations)
     if not agent_review_report.all_passed:
-        retry_instructions.append("Resolve failed subagent reviews in the next attempt.")
+        retry_instructions.append(f"Resolve failed subagent reviews in the next attempt.{route_context_suffix}")
 
-    should_retry = bool(retryable_actions) or (not verification_report.all_passed and bool(retry_instructions))
+    deduped_instructions: list[str] = []
+    seen: set[str] = set()
+    for instruction in retry_instructions:
+        if instruction in seen:
+            continue
+        seen.add(instruction)
+        deduped_instructions.append(instruction)
+
+    should_retry = bool(retryable_actions) or (not verification_report.all_passed and bool(deduped_instructions))
     retry_reason = (
         f"retryable actions detected ({len(retryable_actions)})"
         if retryable_actions
@@ -99,7 +126,7 @@ def build_retry_decision(
         should_retry=should_retry,
         retry_reason=retry_reason,
         max_retry_count=1 if should_retry else 0,
-        retry_instructions=retry_instructions,
+        retry_instructions=deduped_instructions,
     )
 
 
