@@ -34,6 +34,7 @@ class RetryRunnerTests(unittest.TestCase):
             (retry_task_dir / "context" / "retry_instructions.md").write_text("# Retry Instructions\n- Fix the answer\n", encoding="utf-8")
 
             task_output_dir = root / "output" / "task_1"
+            task_output_dir.mkdir(parents=True, exist_ok=True)
             artifact_root = root / "artifacts"
             task_profile = profile_task_context(task_dir)
             route_decision = decide_route(task_profile)
