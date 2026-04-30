@@ -16,20 +16,26 @@ class ThreeWayAttemptSelectionTests(unittest.TestCase):
             failed_verification_checks=2,
             failed_agent_reviews=1,
             failed_semantic_checks=1,
-            total_penalty=211,
+            failed_semantic_error_checks=1,
+            failed_semantic_warning_checks=0,
+            total_penalty=2110,
         )
         post_repair = AttemptEvaluation(
             attempt_name="post_repair",
             failed_verification_checks=1,
             failed_agent_reviews=0,
             failed_semantic_checks=1,
-            total_penalty=101,
+            failed_semantic_error_checks=0,
+            failed_semantic_warning_checks=1,
+            total_penalty=1001,
         )
         retry = AttemptEvaluation(
             attempt_name="retry",
             failed_verification_checks=0,
             failed_agent_reviews=0,
             failed_semantic_checks=1,
+            failed_semantic_error_checks=0,
+            failed_semantic_warning_checks=1,
             total_penalty=1,
         )
 
@@ -37,6 +43,7 @@ class ThreeWayAttemptSelectionTests(unittest.TestCase):
         self.assertEqual(selection.selected_attempt, "retry")
         self.assertTrue(selection.has_retry_attempt)
         self.assertEqual(selection.candidate_count, 3)
+        self.assertIn("runner_up tuple=", selection.rationale)
 
     def test_attempt_selection_plan_points_to_retry_prediction(self) -> None:
         plan = build_attempt_selection_plan(
