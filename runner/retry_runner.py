@@ -4,16 +4,18 @@ import csv
 import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable
-
-from data_agent_baseline.config import load_app_config
-from data_agent_baseline.run.runner import create_run_output_dir, run_single_task
+from typing import TYPE_CHECKING, Any, Callable
 
 from runner.agent_review import AgentReviewReport, run_agent_review
 from runner.attempt_selector import AttemptEvaluation, build_attempt_evaluation
 from runner.semantic_review import SemanticReviewReport, run_semantic_review
 from runner.task_intelligence import normalize_prediction_csv
 from runner.verification import OutputContract, VerificationReport, run_dual_verification
+
+if TYPE_CHECKING:
+    from data_agent_baseline.config import load_app_config as _load_app_config_type
+    from data_agent_baseline.run.runner import create_run_output_dir as _create_run_output_dir_type
+    from data_agent_baseline.run.runner import run_single_task as _run_single_task_type
 
 
 @dataclass(slots=True)
@@ -35,6 +37,24 @@ def _write_fallback_prediction_csv(path: Path) -> None:
         writer.writerow([""])
 
 
+def _default_config_loader(path: Path) -> Any:
+    from data_agent_baseline.config import load_app_config
+
+    return load_app_config(path)
+
+
+def _default_run_output_dir_creator(output_dir: str, run_id: str | None = None) -> tuple[Any, Path]:
+    from data_agent_baseline.run.runner import create_run_output_dir
+
+    return create_run_output_dir(output_dir, run_id=run_id)
+
+
+def _default_task_runner(*, task_id: str, config: Any, run_output_dir: Path) -> Any:
+    from data_agent_baseline.run.runner import run_single_task
+
+    return run_single_task(task_id=task_id, config=config, run_output_dir=run_output_dir)
+
+
 def run_retry_attempt(
     *,
     task_id: str,
@@ -50,10 +70,14 @@ def run_retry_attempt(
     route_decision: Any,
     output_contract: OutputContract | None,
     starter_config_builder: Callable[..., Path],
-    config_loader: Callable[[Path], Any] = load_app_config,
-    run_output_dir_creator: Callable[..., tuple[Any, Path]] = create_run_output_dir,
-    task_runner: Callable[..., Any] = run_single_task,
+    config_loader: Callable[[Path], Any] | None = None,
+    run_output_dir_creator: Callable[..., tuple[Any, Path]] | None = None,
+    task_runner: Callable[..., Any] | None = None,
 ) -> RetryAttemptResult:
+    config_loader = config_loader or _default_config_loader
+    run_output_dir_creator = run_output_dir_creator or _default_run_output_dir_creator
+    task_runner = task_runner or _default_task_runner
+
     retry_config_path = starter_config_builder(
         input_dir=retry_task_dir,
         artifact_dir=artifact_root,
