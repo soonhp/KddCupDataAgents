@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import shutil
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -55,6 +56,13 @@ def _default_task_runner(*, task_id: str, config: Any, run_output_dir: Path) -> 
     return run_single_task(task_id=task_id, config=config, run_output_dir=run_output_dir)
 
 
+def _build_retry_run_id(run_id: str | None, task_id: str) -> str:
+    if run_id:
+        return f"{run_id}-retry-{task_id}"
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"retry-{task_id}-{timestamp}"
+
+
 def run_retry_attempt(
     *,
     task_id: str,
@@ -88,7 +96,8 @@ def run_retry_attempt(
         task_timeout_seconds=task_timeout_seconds,
     )
     retry_config = config_loader(retry_config_path)
-    _, retry_run_output_dir = run_output_dir_creator(retry_config.run.output_dir, run_id=run_id)
+    retry_run_id = _build_retry_run_id(run_id, task_id)
+    _, retry_run_output_dir = run_output_dir_creator(retry_config.run.output_dir, run_id=retry_run_id)
     retry_artifact = task_runner(task_id=task_id, config=retry_config, run_output_dir=retry_run_output_dir)
 
     retry_prediction_path = task_output_dir / "prediction.retry.csv"
