@@ -1,0 +1,16 @@
+.DS_Store
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+artifacts/
+logs/
+output/
+tmp/
+*.tar
+*.tar.gz
+team*_v*.tar.gz

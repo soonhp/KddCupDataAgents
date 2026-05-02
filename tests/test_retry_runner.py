@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from runner.retry_runner import run_retry_attempt
+from runner.retry_runner import _build_retry_run_id, run_retry_attempt
 from runner.task_intelligence import decide_route, profile_task_context
 from runner.verification import infer_output_contract
 
@@ -52,7 +52,10 @@ class RetryRunnerTests(unittest.TestCase):
             def fake_loader(_path: Path):
                 return SimpleNamespace(run=SimpleNamespace(output_dir=str(root / "retry_run")))
 
+            observed_run_ids: list[str | None] = []
+
             def fake_run_output_dir_creator(output_dir: str, run_id: str | None = None):
+                observed_run_ids.append(run_id)
                 run_output_dir = Path(output_dir)
                 run_output_dir.mkdir(parents=True, exist_ok=True)
                 return None, run_output_dir
@@ -98,6 +101,12 @@ class RetryRunnerTests(unittest.TestCase):
             self.assertIsNotNone(result.attempt_evaluation)
             self.assertEqual(result.attempt_evaluation.attempt_name, "retry")
             self.assertEqual(built_inputs["input_dir"], str(retry_task_dir))
+            self.assertEqual(observed_run_ids, ["run-1-retry-task_1"])
+
+    def test_retry_run_id_is_unique_without_parent_run_id(self) -> None:
+        retry_run_id = _build_retry_run_id(None, "task_1")
+
+        self.assertRegex(retry_run_id, r"^retry-task_1-\d{8}T\d{12}Z$")
 
 
 if __name__ == "__main__":

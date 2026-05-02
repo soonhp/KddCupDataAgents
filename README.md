@@ -1,92 +1,142 @@
 # KddCupDataAgents
 
-KDD Cup 2026 Data Agents 대회 대응을 위한 분석/전략 문서를 `docs/`에 정리했고, 실제 제출 가능한 **starter-kit 기반 runner + Docker 구조**를 추가했습니다.
+KDD Cup 2026 DataAgent-Bench 제출을 위한 runner, Docker packaging, local public-demo scoring workflow를 담은 작업 저장소입니다.
 
-## 문서 목록
-- `docs/01_대회_심층분석_및_실행계획.md`
-- `docs/02_codex용_KDD규칙_AGENTS.md`
-- `docs/03_starterkit_실행결과_인사이트.md`
-- `docs/04_데이터셋_분석과_최고득점_전략.md`
-- `docs/05_노션_공유본.md`
-- `docs/06_slack_공유메시지_초안.md`
+이 저장소의 제출 경로는 공식 평가 계약을 기준으로 합니다.
 
-## 추가된 실행 구조
+- 입력: `/input/task_<id>/task.json` 및 `/input/task_<id>/context/`
+- 출력: `/output/task_<id>/prediction.csv`
+- 로그: `/logs/runtime.log`, `/logs/run_summary.json`, `/logs/task_<id>/`
+- 모델: `MODEL_API_URL`, `MODEL_API_KEY`, `MODEL_NAME` 환경변수로 주입되는 OpenAI Chat Completions compatible endpoint
 
-### 1) 평가 runner (`runner/evaluation_runner.py`)
-- `/input/task_<id>/task.json` 기준으로 task를 자동 탐색합니다.
-- 각 task 실행 결과를 `/output/task_<id>/prediction.csv`로 복사/생성합니다.
-- task별 trace/log를 `/logs/task_<id>/`에 저장하고, 전체 요약을 `/logs/run_summary.json`에 기록합니다.
-- 모델 호출 정보는 `MODEL_API_URL`, `MODEL_API_KEY`, `MODEL_NAME` 환경변수를 우선 사용합니다.
-- task별 context 파일 인벤토리를 스캔해 `schema_memory.json`으로 저장합니다.
-- `sql_first`, `python_first`, `document_first` 라우팅 점수/근거를 계산해 `task.log.json`에 기록합니다.
-- 생성된 `prediction.csv`에 대해 null/공백 정규화를 수행합니다.
-- contract/sanity 기반 dual verification 결과를 `task.log.json`에 함께 남깁니다.
-- 실패 원인을 `runtime_timeout`, `output_contract_violation` 등 taxonomy tag로 분류해 task 로그와 `run_summary.json`에 집계합니다.
-- task마다 `run_summary.json`을 중간 checkpoint로 갱신하고, SIGTERM/SIGINT 수신 시 현재 task 종료 후 안전 중단(interrupted) 상태를 기록합니다.
+## 주요 구성
 
-### 2) Docker 제출 구조 (`docker/Dockerfile`)
-- 이미지 빌드 시 공식 starter-kit 저장소를 `git clone`으로 실제 가져옵니다.
-- starter-kit 패키지를 설치한 뒤, 본 저장소의 evaluation runner를 엔트리포인트로 실행합니다.
-- 컨테이너 기본 실행 경로는 대회 계약(`/input`, `/output`, `/logs`)을 따릅니다.
+- `runner/evaluation_runner.py`
+  - `/input` 아래 모든 `task_<id>`를 순회합니다.
+  - starter-kit baseline 실행 결과를 `/output/task_<id>/prediction.csv`로 복사/정규화합니다.
+  - context profiling, route decision, contract/sanity verification, semantic/agent review, retry orchestration 결과를 `/logs`에 남깁니다.
+  - SIGTERM/SIGINT 수신 시 현재 task 종료 후 안전하게 summary를 기록합니다.
+- `runner/scoring.py`, `scripts/score_predictions.py`
+  - public demo `gold.csv` 기준 local metric을 계산합니다.
+  - 공식 rules의 column-signature 방식에 맞춰 header/order를 무시하고 null/numeric/date/datetime 값을 정규화합니다.
+  - 공식 λ 값은 공개되어 있지 않으므로 기본 `--lambda-penalty 0`을 사용합니다.
+- `docker/Dockerfile`, `docker/entrypoint.sh`
+  - 공식 starter-kit commit `c6992b07bcd320b7904505c92c6ba7f7c77e4857`을 기본값으로 고정합니다.
+  - 컨테이너는 `/input`, `/output`, `/logs` 계약으로 실행됩니다.
+- `scripts/build_submission.sh`
+  - 기본 제출 이미지/아카이브인 `team0000:v3`, `team0000_v3.tar.gz`를 생성합니다.
 
-## 로컬 실행 예시
+## 모델 환경변수
+
+평가/실험 시 아래 세 값이 필요합니다. API key는 코드, README, Dockerfile, Git commit에 넣지 않습니다.
 
 ```bash
+export MODEL_API_URL="https://router.huggingface.co/v1"
+export MODEL_API_KEY="$HF_TOKEN"
+export MODEL_NAME="Qwen/Qwen3.5-35B-A3B"
+```
+
+공식 평가에서는 대회 시스템이 내부 Qwen endpoint를 같은 형식으로 주입합니다. OpenAI SDK는 client로만 사용하며, 실제 모델은 `MODEL_API_URL`과 `MODEL_NAME`이 결정합니다.
+
+짧은 연결 테스트:
+
+```bash
+python - <<'PY'
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url=os.environ["MODEL_API_URL"],
+    api_key=os.environ["MODEL_API_KEY"],
+)
+response = client.chat.completions.create(
+    model=os.environ["MODEL_NAME"],
+    messages=[{"role": "user", "content": "Return exactly: ok"}],
+    temperature=0,
+)
+print(response.choices[0].message.content)
+PY
+```
+
+Hugging Face Inference Providers에서 `402`가 발생하면 토큰 권한 문제가 아니라 월간 포함 크레딧 소진입니다. 그 상태에서 생성되는 fallback prediction의 score는 모델 성능 지표로 해석하면 안 됩니다.
+
+## Public Demo 실행 및 채점
+
+공식 starter-kit의 public demo dataset을 준비한 뒤 실행합니다.
+
+```bash
+python -m pip install \
+  git+https://github.com/HKUSTDial/kddcup2026-data-agents-starter-kit@c6992b07bcd320b7904505c92c6ba7f7c77e4857
+
 python -m runner.evaluation_runner \
-  --input /input \
-  --output /output \
-  --logs /logs
+  --input /path/to/public/input \
+  --output /tmp/kdd_public_output \
+  --logs /tmp/kdd_public_logs \
+  --max-workers 1 \
+  --task-timeout-seconds 900
+
+python scripts/score_predictions.py \
+  --prediction-root /tmp/kdd_public_output \
+  --gold-root /path/to/public/output \
+  --json-output /tmp/kdd_public_logs/public_score.json \
+  --csv-output /tmp/kdd_public_logs/public_score.csv
 ```
 
-## Docker 빌드/실행 예시
+## Docker 제출 검증
+
+이미지 빌드 및 제출 archive 생성:
 
 ```bash
-docker build -f docker/Dockerfile -t kdd-dataagent-submission .
-
-docker run --rm \
-  -e MODEL_API_URL="$MODEL_API_URL" \
-  -e MODEL_API_KEY="$MODEL_API_KEY" \
-  -e MODEL_NAME="$MODEL_NAME" \
-  -v /path/to/input:/input:ro \
-  -v /path/to/output:/output \
-  -v /path/to/logs:/logs \
-  kdd-dataagent-submission
+TEAM_ID=team0000 VERSION=v3 scripts/build_submission.sh
 ```
 
-## 회귀 테스트
+대회와 같은 mount 계약으로 실행:
+
+```bash
+docker run --rm \
+  -e MODEL_API_URL \
+  -e MODEL_API_KEY \
+  -e MODEL_NAME \
+  -v /path/to/public/input:/input:ro \
+  -v /tmp/kdd_docker_output:/output \
+  -v /tmp/kdd_docker_logs:/logs \
+  team0000:v3
+```
+
+Docker 실행 결과 채점:
+
+```bash
+python scripts/score_predictions.py \
+  --prediction-root /tmp/kdd_docker_output \
+  --gold-root /path/to/public/output \
+  --json-output /tmp/kdd_docker_logs/public_score.json \
+  --csv-output /tmp/kdd_docker_logs/public_score.csv
+```
+
+검증된 제출 archive는 `team0000_v3.tar.gz`입니다. 대회 team id가 다르면 `TEAM_ID=<actual_team_id>`로 다시 생성합니다.
+
+## 테스트
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
+python -m py_compile runner/*.py scripts/score_predictions.py
 ```
 
-- `tests/test_task_intelligence.py`: 라우팅/정규화/검증 회귀 테스트
-- `tests/test_failure_taxonomy.py`: 실패 taxonomy 분류 및 집계 회귀 테스트
+현재 테스트 커버리지:
 
-## work 브랜치 완전 자동화(PR 생성 → 리뷰 승인 → 자동 머지)
+- routing/context profiling/normalization/verification
+- failure taxonomy
+- repair/retry orchestration
+- retry artifact run id collision 방지
+- official-style public-demo scoring
 
-수동으로 `PR 만들기` 버튼을 누르지 않아도 되도록, `work` 브랜치 기준 자동 승격 파이프라인을 추가했습니다.
+## GitHub Workflow
 
-- `.github/workflows/auto-pr-from-work.yml`
-  - `work` 브랜치 push 시 `main` 대상 PR을 자동 생성(이미 열려 있으면 재사용)
-- `.github/workflows/auto-approve-work-pr.yml`
-  - `work -> main` PR을 `github-actions[bot]`이 자동 승인
-- `.github/workflows/auto-merge-after-review.yml`
-  - 승인 조건 충족 시 auto-merge(squash) 활성화
-- `.github/workflows/ci.yml`
-  - PR 체크(py_compile + unittest) 통과 시 브랜치 보호 규칙과 함께 최종 merge 진행
+`.github/workflows/`에는 `work` 브랜치 자동 PR/approve/auto-merge 보조 workflow와 CI가 있습니다.
 
-> 참고: 실제 merge는 GitHub 브랜치 보호 규칙(필수 체크/리뷰 수) 충족 이후 수행됩니다.
+- `ci.yml`: `py_compile` 및 `unittest`
+- `auto-pr-from-work.yml`: `work` push 시 main 대상 PR 생성
+- `auto-approve-work-pr.yml`: `work -> main` PR 자동 승인
+- `auto-merge-after-review.yml`: 승인 조건 충족 시 auto-merge 활성화
 
-## PR 리뷰 승인 후 자동 머지
-
-저장소의 `main` 대상 PR에 대해, 아래 조건을 만족하면 GitHub Actions가 auto-merge(squash)를 활성화하도록 설정했습니다.
-
-- PR이 `draft`가 아닐 것
-- 최신 리뷰 상태 기준으로 `APPROVED`가 1개 이상일 것
-- 최신 리뷰 상태에 `CHANGES_REQUESTED`가 없을 것
-
-워크플로 파일: `.github/workflows/auto-merge-after-review.yml`
-
-또한 PR/merge 안정성을 위해 `.github/workflows/ci.yml`에서 기본 검증(py_compile + unittest)을 실행하도록 추가했습니다.
-
-> 참고: 워크플로는 auto-merge를 "활성화"합니다. 실제 머지는 브랜치 보호 규칙(필수 체크, 리뷰 수 등)을 모두 만족한 뒤 GitHub가 수행합니다.
+기능 단위 변경은 별도 branch와 PR로 올리고, 제출용 credential이나 dataset artifact는 커밋하지 않습니다.
